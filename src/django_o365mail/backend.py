@@ -1,13 +1,12 @@
+import logging
+import threading
+
+import O365
 from django.core.mail.backends.base import BaseEmailBackend
 from django.utils.module_loading import import_string
-import threading
-import O365
 
-from . import settings
-from . import util
-
-import logging
-from .o365_logger import SimpleErrorHandler # Handles auth exceptions!
+from . import settings, util
+from .o365_logger import SimpleErrorHandler  # Handles auth exceptions!
 
 
 """
@@ -18,15 +17,14 @@ See https://docs.microsoft.com/en-us/graph/auth-v2-service?context=graph%2Fapi%2
 
 
 class O365EmailBackend(BaseEmailBackend):
-    def __init__(self, client_id=None, client_secret=None, tenant_id=None,
-                 fail_silently=False, **kwargs):
+    def __init__(self, client_id=None, client_secret=None, tenant_id=None, fail_silently=False, **kwargs):
         super().__init__(fail_silently=fail_silently)
         self.client_id = client_id or settings.O365_MAIL_CLIENT_ID
         self.client_secret = client_secret or settings.O365_MAIL_CLIENT_SECRET
         self.tenant_id = tenant_id or settings.O365_MAIL_TENANT_ID
 
         self.mailbox = None
-        
+
         # Handle exceptions that come from authentication (Only errors)
         # This is needed because O365 does not raise Exceptions, it only logs them.
         self.log_handler = SimpleErrorHandler()
@@ -85,7 +83,7 @@ class O365EmailBackend(BaseEmailBackend):
         return num_sent
 
     def _get_extra_account_kwargs(self):
-        """ Read extra account kwargs """
+        """Read extra account kwargs"""
         account_kwargs = {**settings.O365_MAIL_ACCOUNT_KWARGS}
 
         # Allow to customize token backend
@@ -120,29 +118,32 @@ class O365EmailBackend(BaseEmailBackend):
         m.sender.name, m.sender.address = util.get_name_and_email(email_message.from_email)
         m.subject = "".join([settings.O365_SUBJECT_PREFIX, email_message.subject])
         m.body = util.get_message_body(email_message)
-        
+
         # Attachments
         if email_message.attachments:
             for attachment in email_message.attachments:
                 # The attachment can either be a MIME object or a tuple according to Django docs.
                 # We need to convert it to a file object for the O365 API!
-                converter = util.get_converter(attachment)(attachment) # get_converter returns a reference to a function, thus it's ()()!
+                converter = util.get_converter(attachment)(attachment)  # get_converter returns a reference to a function, thus it's ()()!
                 file = converter.get_file()
                 filename = converter.get_filename()
 
                 attachment_count = len(m.attachments)
                 m.attachments.add([(file, filename)])
-                att_obj = m.attachments[attachment_count] # count is +1 compared to index, so we already have the correct index
+                att_obj = m.attachments[attachment_count]  # count is +1 compared to index, so we already have the correct index
 
                 # This is to support inline content (e.g. images)
                 att_obj.is_inline = converter.is_inline()
                 att_obj.content_id = converter.get_content_id()
-        
+
         # Send it!
-        try:
-            if (settings.DEBUG and settings.O365_ACTUALLY_SEND_IN_DEBUG) or not settings.DEBUG:
-                return m.send(save_to_sent_folder=settings.O365_MAIL_SAVE_TO_SENT)
+        if settings.DEBUG and not getattr(settings, 'O365_ACTUALLY_SEND_IN_DEBUG', False):
+            logging.getLogger('O365').info(
+                'Skipping real email sending since DEBUG is True. Add O365_ACTUALLY_SEND_IN_DEBUG=True to your settings to actually send emails in debug mode.'
+            )
             return True
+        try:
+            return m.send(save_to_sent_folder=settings.O365_MAIL_SAVE_TO_SENT)
         except Exception as e:
             if self.fail_silently:
                 return False
